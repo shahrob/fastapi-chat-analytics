@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     
     # MongoDB
     MONGODB_URL: str = "mongodb://localhost:27017"
-    MONGODB_DATABASE: str = "mail-cub"
+    MONGODB_DATABASE: str = "data_base_name"
 
     
     # Security

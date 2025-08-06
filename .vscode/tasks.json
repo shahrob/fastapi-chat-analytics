@@ -1,0 +1,14 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "FastAPI: Start Development Server",
+      "type": "shell",
+      "command": "source venv/bin/activate && uvicorn main:app --reload --host 0.0.0.0 --port 8000",
+      "group": "build",
+      "isBackground": true,
+      "problemMatcher": [],
+      "args": []
+    }
+  ]
+}

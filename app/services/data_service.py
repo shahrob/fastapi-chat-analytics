@@ -4,7 +4,7 @@ from datetime import datetime
 import json
 import io
 from bson import ObjectId
-from app.mongodb import get_mongodb
+from app.db.mongodb import get_mongodb
 from app.models.message import Message
 from app.models.conversation import Conversation
 from app.models.user import User

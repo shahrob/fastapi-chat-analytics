@@ -116,6 +116,7 @@ async def analyze_collection_with_pandas(collection_name: str):
     """Analyze a specific MongoDB collection using pandas - No authentication required"""
     
     try:
+        
         analysis = await data_service.analyze_mongodb_data_with_pandas(collection_name)
         
         return {
@@ -134,7 +135,6 @@ async def analyze_collection_with_pandas(collection_name: str):
 @router.get("/pandas/analyze")
 async def analyze_first_collection_with_pandas():
     """Analyze the first available MongoDB collection using pandas - No authentication required"""
-    
     try:
         analysis = await data_service.analyze_mongodb_data_with_pandas()
         

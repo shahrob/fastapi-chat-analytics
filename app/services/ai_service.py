@@ -1,64 +1,82 @@
-from openai import AsyncOpenAI
+"""
+services/ai_service.py
+───────────────────────
+OpenAI integration for generating chat responses.
+"""
+
+import logging
 from typing import List, Optional
-from app.config import settings
+
+from openai import AsyncOpenAI
+
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
 
 class AIService:
-    def __init__(self):
+    """Thin wrapper around the OpenAI async client."""
+
+    def __init__(self) -> None:
         if settings.OPENAI_API_KEY:
             self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            logger.info("OpenAI client initialised (model=%s)", settings.OPENAI_MODEL)
         else:
             self.client = None
+            logger.warning(
+                "OPENAI_API_KEY is not set — AI responses will be stubbed."
+            )
 
-    async def generate_response(self, message: str, conversation_history: Optional[List[dict]] = None) -> str:
-        """Generate AI response using OpenAI API"""
-        
+    async def generate_response(
+        self,
+        message: str,
+        conversation_history: Optional[List[dict]] = None,
+    ) -> str:
+        """Generate a chat completion from OpenAI.
+
+        Falls back to a friendly stub if the API key is not configured.
+        """
         if not self.client:
-            return "🤖 AI service is not configured. Please set your OpenAI API key in the environment variables."
-        
+            return (
+                "🤖 AI service is not configured. "
+                "Please set OPENAI_API_KEY in your environment variables."
+            )
+
         try:
-            # Prepare conversation context
             messages = [
                 {
-                    "role": "system", 
-                    "content": "You are a helpful AI assistant. Provide concise, helpful, and friendly responses."
+                    "role": "system",
+                    "content": (
+                        "You are a helpful AI assistant. "
+                        "Provide concise, helpful, and friendly responses."
+                    ),
                 }
             ]
-            
-            # Add conversation history if provided
             if conversation_history:
-                for msg in conversation_history[-10:]:  # Last 10 messages for context
-                    messages.append(msg)
-            
-            # Add current message
+                messages.extend(conversation_history[-10:])
             messages.append({"role": "user", "content": message})
-            
-            # Generate response
+
             response = await self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model=settings.OPENAI_MODEL,
                 messages=messages,
-                max_tokens=500,
+                max_tokens=settings.OPENAI_MAX_TOKENS,
                 temperature=0.7,
-                top_p=1,
-                frequency_penalty=0,
-                presence_penalty=0
             )
-            
             return response.choices[0].message.content.strip()
-            
-        except Exception as e:
-            return f"🤖 Sorry, I'm having trouble processing your request. Error: {str(e)}"
+
+        except Exception as exc:
+            logger.error("OpenAI API error: %s", exc)
+            return f"🤖 Sorry, I'm having trouble processing your request. Error: {exc}"
 
     def format_conversation_history(self, messages: List) -> List[dict]:
-        """Format conversation history for AI context"""
-        formatted_messages = []
-        
-        for msg in messages:
-            role = "assistant" if msg.is_ai_response else "user"
-            formatted_messages.append({
-                "role": role,
-                "content": msg.content
-            })
-        
-        return formatted_messages
+        """Convert ORM Message objects to OpenAI message dicts."""
+        return [
+            {
+                "role": "assistant" if msg.is_ai_response else "user",
+                "content": msg.content,
+            }
+            for msg in messages
+        ]
+
 
 ai_service = AIService()

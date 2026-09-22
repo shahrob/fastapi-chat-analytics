@@ -1,118 +1,162 @@
+"""
+services/chat_service.py
+─────────────────────────
+Business logic for conversations and messages.
+DB access is delegated to the repository layer.
+"""
+
+from typing import List, Optional, Tuple
+
 from sqlalchemy.orm import Session
-from typing import List, Optional
+
+from app.core.exceptions import ConversationNotFoundError
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.user import User
+from app.repositories.conversation_repository import conversation_repository
+from app.repositories.message_repository import message_repository
 from app.schemas.conversation import ConversationCreate, ConversationUpdate
 from app.schemas.message import MessageCreate
 from app.services.ai_service import ai_service
 
+
 class ChatService:
+    """Manages conversations and chat messages, including AI responses."""
+
+    # ── Conversations ──────────────────────────────────────────────────────────
     @staticmethod
-    def create_conversation(db: Session, conversation: ConversationCreate, user: User) -> Conversation:
-        """Create a new conversation"""
-        db_conversation = Conversation(
-            title=conversation.title,
-            user_id=user.id
+    def create_conversation(
+        db: Session, conversation: ConversationCreate, user: User
+    ) -> Conversation:
+        """Create a new conversation owned by *user*."""
+        return conversation_repository.create(
+            db,
+            obj_in={"title": conversation.title, "user_id": user.id},
         )
-        db.add(db_conversation)
-        db.commit()
-        db.refresh(db_conversation)
-        return db_conversation
 
     @staticmethod
-    def get_user_conversations(db: Session, user: User, skip: int = 0, limit: int = 100) -> List[Conversation]:
-        """Get user's conversations"""
-        return db.query(Conversation).filter(
-            Conversation.user_id == user.id
-        ).offset(skip).limit(limit).all()
+    def get_user_conversations(
+        db: Session, user: User, skip: int = 0, limit: int = 100
+    ) -> List[Conversation]:
+        """Return paginated conversations for *user*."""
+        return conversation_repository.get_by_user(
+            db, user_id=user.id, skip=skip, limit=limit
+        )
 
     @staticmethod
-    def get_conversation(db: Session, conversation_id: int, user: User) -> Optional[Conversation]:
-        """Get conversation by ID (user must own it)"""
-        return db.query(Conversation).filter(
-            Conversation.id == conversation_id,
-            Conversation.user_id == user.id
-        ).first()
+    def get_conversation(
+        db: Session, conversation_id: int, user: User
+    ) -> Optional[Conversation]:
+        """Return a conversation only if it belongs to *user*; else None."""
+        return conversation_repository.get_by_id_and_user(
+            db, conversation_id=conversation_id, user_id=user.id
+        )
 
     @staticmethod
-    def update_conversation(db: Session, conversation_id: int, conversation_update: ConversationUpdate, user: User) -> Optional[Conversation]:
-        """Update conversation"""
-        conversation = ChatService.get_conversation(db, conversation_id, user)
-        if not conversation:
+    def update_conversation(
+        db: Session,
+        conversation_id: int,
+        conversation_update: ConversationUpdate,
+        user: User,
+    ) -> Optional[Conversation]:
+        """Apply partial updates to a conversation. Returns None if not found."""
+        conv = conversation_repository.get_by_id_and_user(
+            db, conversation_id=conversation_id, user_id=user.id
+        )
+        if not conv:
             return None
-        
-        for field, value in conversation_update.dict(exclude_unset=True).items():
-            setattr(conversation, field, value)
-        
-        db.commit()
-        db.refresh(conversation)
-        return conversation
+        return conversation_repository.update(
+            db,
+            db_obj=conv,
+            obj_in=conversation_update.model_dump(exclude_unset=True),
+        )
 
     @staticmethod
     def delete_conversation(db: Session, conversation_id: int, user: User) -> bool:
-        """Delete conversation"""
-        conversation = ChatService.get_conversation(db, conversation_id, user)
-        if not conversation:
+        """Delete a conversation. Returns False if it doesn't exist / wrong owner."""
+        conv = conversation_repository.get_by_id_and_user(
+            db, conversation_id=conversation_id, user_id=user.id
+        )
+        if not conv:
             return False
-        
-        db.delete(conversation)
-        db.commit()
+        conversation_repository.delete(db, id=conversation_id)
         return True
 
+    # ── Messages ───────────────────────────────────────────────────────────────
     @staticmethod
-    def create_message(db: Session, message: MessageCreate, conversation_id: int, user: User, is_ai_response: bool = False) -> Message:
-        """Create a new message"""
-        db_message = Message(
-            content=message.content,
-            conversation_id=conversation_id,
-            user_id=user.id,
-            is_ai_response=is_ai_response
-        )
-        db.add(db_message)
-        db.commit()
-        db.refresh(db_message)
-        return db_message
-
-    @staticmethod
-    def get_conversation_messages(db: Session, conversation_id: int, user: User, skip: int = 0, limit: int = 100) -> List[Message]:
-        """Get messages for a conversation"""
-        # First verify user owns the conversation
-        conversation = ChatService.get_conversation(db, conversation_id, user)
-        if not conversation:
-            return []
-        
-        return db.query(Message).filter(
-            Message.conversation_id == conversation_id
-        ).order_by(Message.created_at).offset(skip).limit(limit).all()
-
-    @staticmethod
-    async def send_message_with_ai_response(db: Session, message_content: str, conversation_id: int, user: User) -> tuple[Message, Message]:
-        """Send message and get AI response"""
-        
-        # Create user message
-        user_message = ChatService.create_message(
-            db, 
-            MessageCreate(content=message_content), 
-            conversation_id, 
-            user, 
-            is_ai_response=False
-        )
-        
-        # Get conversation history for AI context
-        messages = ChatService.get_conversation_messages(db, conversation_id, user, limit=10)
-        conversation_history = ai_service.format_conversation_history(messages[:-1])  # Exclude the just-created message
-        
-        # Generate AI response
-        ai_response_content = await ai_service.generate_response(message_content, conversation_history)
-        
-        # Create AI response message
-        ai_message = ChatService.create_message(
+    def create_message(
+        db: Session,
+        message: MessageCreate,
+        conversation_id: int,
+        user: User,
+        is_ai_response: bool = False,
+    ) -> Message:
+        """Persist a single message."""
+        return message_repository.create(
             db,
-            MessageCreate(content=ai_response_content),
+            obj_in={
+                "content": message.content,
+                "conversation_id": conversation_id,
+                "user_id": user.id,
+                "is_ai_response": is_ai_response,
+            },
+        )
+
+    @staticmethod
+    def get_conversation_messages(
+        db: Session,
+        conversation_id: int,
+        user: User,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> List[Message]:
+        """Return messages for a conversation — verifies user ownership first."""
+        conv = conversation_repository.get_by_id_and_user(
+            db, conversation_id=conversation_id, user_id=user.id
+        )
+        if not conv:
+            return []
+        return message_repository.get_by_conversation(
+            db, conversation_id=conversation_id, skip=skip, limit=limit
+        )
+
+    @staticmethod
+    async def send_message_with_ai_response(
+        db: Session,
+        message_content: str,
+        conversation_id: int,
+        user: User,
+    ) -> Tuple[Message, Message]:
+        """Persist the user message, call the AI service, and persist the reply."""
+        # Persist user message
+        user_message = ChatService.create_message(
+            db,
+            MessageCreate(content=message_content),
             conversation_id,
             user,
-            is_ai_response=True
+            is_ai_response=False,
         )
-        
+
+        # Build context from recent history (excludes the just-created message)
+        recent = message_repository.get_recent_context(
+            db, conversation_id=conversation_id, limit=10
+        )
+        # The last item is the message we just created; exclude it for context
+        history = ai_service.format_conversation_history(recent[:-1])
+
+        # Generate AI reply
+        ai_content = await ai_service.generate_response(message_content, history)
+
+        # Persist AI message
+        ai_message = ChatService.create_message(
+            db,
+            MessageCreate(content=ai_content),
+            conversation_id,
+            user,
+            is_ai_response=True,
+        )
+
         return user_message, ai_message
+
+
+chat_service = ChatService()

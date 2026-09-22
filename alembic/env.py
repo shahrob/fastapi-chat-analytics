@@ -10,9 +10,9 @@ import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from app.database import Base
+from app.db.session import Base
 from app.models import user, conversation, message
-from app.config import settings
+from app.core.config import settings
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

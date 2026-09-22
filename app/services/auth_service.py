@@ -1,69 +1,89 @@
-from datetime import datetime, timedelta
+"""
+services/auth_service.py
+─────────────────────────
+Authentication business logic.
+
+Security primitives (hashing, JWT) live in ``app.core.security``.
+DB access is delegated to ``UserRepository``.
+"""
+
 from typing import Optional
-from jose import JWTError, jwt
-from passlib.context import CryptContext
+
 from sqlalchemy.orm import Session
 
-from app.config import settings
+from app.core.security import get_password_hash, verify_password, create_access_token
+from app.core.exceptions import (
+    DuplicateEmailError,
+    DuplicateUsernameError,
+    UnauthorizedError,
+)
 from app.models.user import User
+from app.repositories.user_repository import user_repository
 from app.schemas.user import UserCreate
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 class AuthService:
-    @staticmethod
-    def verify_password(plain_password: str, hashed_password: str) -> bool:
-        """Verify password against hash"""
-        return pwd_context.verify(plain_password, hashed_password)
+    """Handles user registration and authentication workflows."""
 
     @staticmethod
-    def get_password_hash(password: str) -> str:
-        """Hash password"""
-        return pwd_context.hash(password)
+    def register(db: Session, user_in: UserCreate) -> User:
+        """
+        Register a new user.
+
+        Raises
+        ------
+        DuplicateUsernameError
+            If the username is already taken.
+        DuplicateEmailError
+            If the email is already registered.
+        """
+        if user_repository.get_by_username(db, user_in.username):
+            raise DuplicateUsernameError(user_in.username)
+        if user_repository.get_by_email(db, user_in.email):
+            raise DuplicateEmailError(user_in.email)
+
+        return user_repository.create(
+            db,
+            obj_in={
+                "username": user_in.username,
+                "email": user_in.email,
+                "full_name": user_in.full_name,
+                "hashed_password": get_password_hash(user_in.password),
+            },
+        )
 
     @staticmethod
-    def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
-        """Create JWT access token"""
-        to_encode = data.copy()
-        if expires_delta:
-            expire = datetime.utcnow() + expires_delta
-        else:
-            expire = datetime.utcnow() + timedelta(minutes=15)
-        to_encode.update({"exp": expire})
-        encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
-        return encoded_jwt
+    def authenticate(db: Session, username: str, password: str) -> User:
+        """
+        Verify credentials and return the User.
 
-    @staticmethod
-    def authenticate_user(db: Session, username: str, password: str) -> Optional[User]:
-        """Authenticate user with username and password"""
-        user = db.query(User).filter(User.username == username).first()
-        if not user:
-            return None
-        if not AuthService.verify_password(password, user.hashed_password):
-            return None
+        Raises
+        ------
+        UnauthorizedError
+            If the username does not exist or the password is incorrect.
+        """
+        user = user_repository.get_by_username(db, username)
+        if not user or not verify_password(password, user.hashed_password):
+            raise UnauthorizedError("Incorrect username or password.")
         return user
 
     @staticmethod
-    def create_user(db: Session, user: UserCreate) -> User:
-        """Create new user"""
-        hashed_password = AuthService.get_password_hash(user.password)
-        db_user = User(
-            username=user.username,
-            email=user.email,
-            full_name=user.full_name,
-            hashed_password=hashed_password
-        )
-        db.add(db_user)
-        db.commit()
-        db.refresh(db_user)
-        return db_user
+    def create_token(user: User) -> str:
+        """Generate a JWT access token for *user*."""
+        return create_access_token(data={"sub": user.username})
 
+    # ── Kept for backwards-compatibility (used by dependencies.py) ─────────────
     @staticmethod
     def get_user_by_username(db: Session, username: str) -> Optional[User]:
-        """Get user by username"""
-        return db.query(User).filter(User.username == username).first()
+        return user_repository.get_by_username(db, username)
 
     @staticmethod
     def get_user_by_email(db: Session, email: str) -> Optional[User]:
-        """Get user by email"""
-        return db.query(User).filter(User.email == email).first()
+        return user_repository.get_by_email(db, email)
+
+    @staticmethod
+    def create_user(db: Session, user: UserCreate) -> User:
+        return AuthService.register(db, user)
+
+
+auth_service = AuthService()
